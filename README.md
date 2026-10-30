@@ -91,6 +91,18 @@ Claude Code does not send Bash output to a mod while a command runs. If a Bash c
 
 The `tee` wrapper uses process substitution. Use bash or zsh as the shell.
 
+## Subagents and child sessions
+
+The band shows the runs of the session, of its subagents, and of its child sessions. Each row names its source after the runner: the task of the subagent, or the name of the child session.
+
+- Several runs can show at the same time. The band shows a maximum of four rows. The last row gives the sums of the runs that do not fit.
+- Running runs come first, then failed runs, then passed runs.
+- A new run replaces only the finished runs of the same source.
+
+Child sessions work only in the desktop app, because the app gives each session an id. Each session writes its runs to a file in `$XDG_RUNTIME_DIR/claude-test-progress/`. The parent reads the files of its children, and of their children, at an interval of 1.5 seconds. A session gets its parent from the `get_session` tool of the desktop app, one time, at its first test run.
+
+Install the mod for the user, so that each child session loads it.
+
 ## Development
 
 ```bash

@@ -258,3 +258,93 @@ test('a new run replaces the finished run', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /pytest/ })).toBeUndefined()
   await ui.unmount()
 })
+
+// The desktop app's id and the shared folder for the session call; /tmp for each other call.
+const desk = (e: unknown, host: string) =>
+  String((e as { argv: string[] }).argv.at(-1)).includes('CLAUDE_CODE_HOST_SESSION_ID') ? `${host}\n/run/user/1000` : '/tmp'
+
+const child = (host: string, parent: string, name: string, runs: unknown[]) =>
+  JSON.stringify({ host, parent, name, runs })
+
+test('the parent shows the runs of its child sessions, and of their children', async ($, on) => {
+  const clock = mock.clock(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('process.run', (_, e) => ({ value: { exitCode: 0, stdout: desk(e, 'local_parent'), stderr: '' } }))
+  const files: Record<string, string> = {
+    'local_a.json': child('local_a', 'local_parent', 'open-frame', [
+      { id: 't1', runner: 'pytest', passed: 3, failed: 1, skipped: 0, total: 10, status: 'running' },
+    ]),
+    'local_b.json': child('local_b', 'local_a', 'grandchild', [
+      { id: 't2', runner: 'vitest', passed: 5, failed: 0, skipped: 0, total: 5, status: 'passed', finishedAt: 1_000 },
+    ]),
+    'local_x.json': child('local_x', 'local_other', 'stranger', [
+      { id: 't3', runner: 'jest', passed: 9, failed: 0, skipped: 0, total: 9, status: 'running' },
+    ]),
+  }
+  on('fs.list', () => ({ value: Object.keys(files).map(name => ({ name, kind: 'file', size: 1, mtimeMs: 500, isLink: false })) }))
+  on('fs.read', (_, e) => {
+    const name = String((e as { path?: string }).path).split('/').pop() ?? ''
+    if (files[name] === undefined) throw new Error('ENOENT')
+    return { value: files[name] }
+  })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await clock.advance(2_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await ui.find({ type: 'Text', text: /pytest/ }))?.text).toMatch(/ 4\/10 ✓3 ✗1 pytest · open-frame$/)
+  expect((await ui.find({ type: 'Text', text: /vitest/ }))?.text).toMatch(/ 5\/5 ✓5 ✗0 vitest · grandchild$/)
+  expect(await ui.find({ type: 'Text', text: /stranger/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('several runs at once fit in four rows, and the rest go into one row', async ($, on) => {
+  const clock = mock.clock(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('process.run', (_, e) => ({ value: { exitCode: 0, stdout: desk(e, 'local_parent'), stderr: '' } }))
+  const files: Record<string, string> = {}
+  for (let i = 1; i <= 6; i += 1) {
+    files[`local_c${i}.json`] = child(`local_c${i}`, 'local_parent', `child-${i}`, [
+      { id: `t${i}`, runner: 'pytest', passed: i, failed: i === 2 ? 1 : 0, skipped: 0, total: 10, status: 'running' },
+    ])
+  }
+  on('fs.list', () => ({ value: Object.keys(files).map(name => ({ name, kind: 'file', size: 1, mtimeMs: 500, isLink: false })) }))
+  on('fs.read', (_, e) => ({ value: files[String((e as { path?: string }).path).split('/').pop() ?? ''] }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.advance(2_000)
+
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /child-3/ }))?.text).toMatch(/pytest · child-3$/)
+  expect(await ui.find({ type: 'Text', text: /child-4/ })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /more/ }))?.text).toBe('+3 more ✓15 ✗0 3 running')
+  await ui.unmount()
+})
+
+test('each session writes its runs for its parent', async ($, on) => {
+  mock.clock(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('process.run', (_, e) => ({ value: { exitCode: 0, stdout: desk(e, 'local_kid'), stderr: '' } }))
+  on('fs.list', () => ({ value: [] }))
+  on('fs.read', () => {
+    throw new Error('ENOENT')
+  })
+  const written: Record<string, string> = {}
+  on('fs.write', (_, e) => {
+    const w = e as { path: string; text: string }
+    written[w.path] = w.text
+    return { value: undefined }
+  })
+  on('tool.call', (_, e) => {
+    if ((e as { tool: string }).tool === 'mcp__ccd_session_mgmt__get_session') {
+      return { result: {}, text: JSON.stringify({ parentSessionId: 'local_parent', name: 'kid' }) }
+    }
+    return { result: {}, text: '===== 2 passed in 0.1s =====\n' }
+  })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: 'pytest' })
+
+  const data = JSON.parse(written['/run/user/1000/claude-test-progress/local_kid.json'] ?? '{}')
+  expect([data.parent, data.name, data.runs?.[0]?.passed, data.runs?.[0]?.status]).toEqual(['local_parent', 'kid', 2, 'passed'])
+})
