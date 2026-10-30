@@ -16,6 +16,8 @@ test('the runner is found in test commands only', async () => {
   expect(detectRunner('cat pytest.ini')).toBe(null)
   expect(detectRunner('ls -la')).toBe(null)
   expect(detectRunner('~/.venvs/badcad/bin/python cad/tools/test_scope.py --all')).toBe('test_scope')
+  expect(detectRunner('go run ./cmd/exoworks validate')).toBe('validate')
+  expect(detectRunner('claude plugin validate .')).toBe('plugin validate')
   expect(detectRunner('timeout 600 ~/.local/bin/cad-slot ~/.venvs/badcad/bin/python -m unittest tests.test_x')).toBe('unittest')
 })
 
@@ -44,6 +46,16 @@ test('the summary lines of each runner give the counts', async () => {
       'Ran 1 test in 223.298s\n\nFAILED (failures=1)\n',
   )
   expect([groups.passed, groups.failed, groups.total, groups.isSummary]).toEqual([37, 8, 45, true])
+
+  // the validators: the errors fail, the warnings are skipped, a pass counts one
+  const catalog = parseOutput(
+    'Validating instance model trees...\n\nWarnings (6):\n  ⚠  a\n\nErrors (15):\n  ✗  b\n\nContent validation failed.\nexit status 1\n',
+  )
+  expect([catalog.passed, catalog.failed, catalog.skipped, catalog.isSummary]).toEqual([0, 15, 6, true])
+  const plugin = parseOutput(
+    'Validating marketplace manifest: x/marketplace.json\n\n⚠ Found 1 warning:\n\n  ❯ description: none\n\n✔ Validation passed with warnings\n',
+  )
+  expect([plugin.passed, plugin.failed, plugin.skipped]).toEqual([1, 0, 1])
 })
 
 test('the result lines count while the tests run', async () => {

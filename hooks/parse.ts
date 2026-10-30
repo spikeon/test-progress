@@ -11,6 +11,9 @@ export type Counts = {
 
 const RUNNERS: readonly [string, RegExp][] = [
   ['pytest', /\b(pytest|py\.test)\b|\bpython3?\s+-m\s+pytest\b/],
+  // validators: the counts are the errors (failed) and the warnings (skipped)
+  ['validate', /\b(cmd\/)?exoworks\s+validate\b/],
+  ['plugin validate', /\bclaude\s+plugin\s+validate\b/],
   // ExoWorks cad/tools/test_scope.py: runs the unittest groups that the git diff can break
   ['test_scope', /\btest_scope\.py\b/],
   ['unittest', /\bpython3?\s+-m\s+unittest\b/],
@@ -80,6 +83,18 @@ function unittestSummary(lines: string[]): Omit<Counts, 'isSummary'> {
   return { passed: total - failed - skipped, failed, skipped, total }
 }
 
+// Reads the result of a validator: ExoWorks validate (Errors (2): ... Content validation failed.) or
+// claude plugin validate (Found 1 warning: ... Validation passed with warnings). A validator that passes
+// counts one pass.
+function validateSummary(text: string): Omit<Counts, 'isSummary'> | null {
+  const result = text.match(/^\W*(?:Content )?[Vv]alidation (passed|failed)\b/m)
+  if (!result) return null
+  const failed = num(text, /^Errors \((\d+)\):/m) + num(text, /Found (\d+) errors?\b/)
+  const skipped = num(text, /^Warnings \((\d+)\):/m) + num(text, /Found (\d+) warnings?\b/)
+  const passed = result[1] === 'passed' ? 1 : 0
+  return { passed, failed, skipped, total: passed + failed + skipped }
+}
+
 // Reads the final summary line of a known runner. The last summary wins,
 // except for runners that print one summary per test binary (cargo).
 function summary(text: string): Omit<Counts, 'isSummary'> | null {
@@ -89,6 +104,9 @@ function summary(text: string): Omit<Counts, 'isSummary'> | null {
     const c = cargo.reduce((a, m) => [a[0] + Number(m[1]), a[1] + Number(m[2]), a[2] + Number(m[3])] as [number, number, number], [0, 0, 0] as [number, number, number])
     return { passed: c[0], failed: c[1], skipped: c[2], total: c[0] + c[1] + c[2] }
   }
+
+  const validated = validateSummary(text)
+  if (validated) return validated
 
   const lines = text.split('\n')
   for (let i = lines.length - 1; i >= 0; i -= 1) {

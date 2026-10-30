@@ -40,6 +40,7 @@ In the desktop app, `/plugin` does not run. Click **+** next to the prompt box, 
 - Ruby, PHP, and Elixir: rspec, rake, phpunit, mix test
 - Java and C: Gradle, Maven, ctest, `make test`
 - Claude Code: `claude plugin test`
+- Validators: the ExoWorks `exoworks validate` and `claude plugin validate`. The errors show as failed and the warnings show as skipped.
 
 ## How it works
 
