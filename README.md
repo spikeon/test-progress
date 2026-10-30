@@ -34,13 +34,51 @@ In the desktop app, `/plugin` does not run. Click **+** next to the prompt box, 
 
 ## Supported test runners
 
-- Python: pytest, unittest, tox, and the ExoWorks `cad/tools/test_scope.py` (one summary for each unittest group)
+- Python: pytest, unittest (one summary for each unittest group, added together), tox
 - JavaScript: jest, vitest, mocha, bun test, deno test, node --test, `npm test`, `pnpm test`, `yarn test`
 - Go, Rust, and .NET: go test, cargo test, dotnet test
 - Ruby, PHP, and Elixir: rspec, rake, phpunit, mix test
 - Java and C: Gradle, Maven, ctest, `make test`
 - Claude Code: `claude plugin test`
-- Validators: the ExoWorks `exoworks validate` and `claude plugin validate`. The errors show as failed and the warnings show as skipped.
+- Validators: `claude plugin validate`. The errors show as failed and the warnings show as skipped.
+
+## Configuration
+
+Add runners for your setup in a JSON file. You do not need to change the code. The mod reads two files at each Bash call, so a change applies at once:
+
+- The project config: `.claude/test-progress.json` in the project root, or in a parent folder of the root.
+- The user config: `~/.claude/test-progress.json`.
+
+The mod tries the project runners first, then the user runners, then the built-in runners.
+
+```json
+{
+  "runners": [
+    { "name": "test_scope", "match": "\\btest_scope\\.py\\b" },
+    {
+      "name": "validate",
+      "match": "\\bexoworks\\s+validate\\b",
+      "summary": {
+        "result": "^Content validation (passed|failed)",
+        "failed": "^Errors \\((\\d+)\\):",
+        "skipped": "^Warnings \\((\\d+)\\):",
+        "passIf": "^Content validation passed"
+      }
+    }
+  ],
+  "disable": ["make test"]
+}
+```
+
+- `runners[].name`: the name in the band.
+- `runners[].match`: a JavaScript regular expression that finds the runner in the Bash command.
+- `runners[].summary`: optional. Without it, the built-in summary lines and result lines give the counts.
+  - `result`: the line that marks the end of the run. Until it matches, the counts are not final.
+  - `passed`, `failed`, `skipped`, `total`: each pattern has one group, the number. The mod adds the numbers of all the lines that match. Without `total`, the total is the sum of the other counts.
+  - `passIf`: if this pattern matches, the mod counts one pass. Use it for a validator that prints no count when it passes.
+- `disable`: the names of built-in runners to turn off.
+
+If a config file has an error, a toast shows the first problem. The mod ignores a runner that has a bad field and keeps the other runners.
 
 ## How it works
 

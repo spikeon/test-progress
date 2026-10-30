@@ -1,5 +1,8 @@
 // Detects test commands and reads test counts from their output.
 
+import { NO_SETUP, configSummary } from './config'
+import type { Runner, Setup } from './config'
+
 export type Counts = {
   passed: number
   failed: number
@@ -12,10 +15,7 @@ export type Counts = {
 const RUNNERS: readonly [string, RegExp][] = [
   ['pytest', /\b(pytest|py\.test)\b|\bpython3?\s+-m\s+pytest\b/],
   // validators: the counts are the errors (failed) and the warnings (skipped)
-  ['validate', /\b(cmd\/)?exoworks\s+validate\b/],
   ['plugin validate', /\bclaude\s+plugin\s+validate\b/],
-  // ExoWorks cad/tools/test_scope.py: runs the unittest groups that the git diff can break
-  ['test_scope', /\btest_scope\.py\b/],
   ['unittest', /\bpython3?\s+-m\s+unittest\b/],
   ['vitest', /\bvitest\b/],
   ['jest', /\bjest\b/],
@@ -41,10 +41,14 @@ const RUNNERS: readonly [string, RegExp][] = [
 // Commands that only read or search text that names a runner.
 const NOT_A_RUN = /^\s*(cat|less|head|tail|grep|rg|ls|find|which|echo|printf|git|sed|awk|vi|vim|nano|code)\b/
 
-export function detectRunner(command: string): string | null {
+// Finds the runner of a command: first the runners of the setup's config, then the built-in runners
+// that the config does not turn off.
+export function detectRunner(command: string, setup: Setup = NO_SETUP): Runner | null {
   if (NOT_A_RUN.test(command)) return null
-  for (const [name, pattern] of RUNNERS) {
-    if (pattern.test(command)) return name
+  const found = setup.runners.find(r => r.match.test(command))
+  if (found) return found
+  for (const [name, match] of RUNNERS) {
+    if (!setup.disabled.has(name) && match.test(command)) return { name, match }
   }
   return null
 }
@@ -83,14 +87,13 @@ function unittestSummary(lines: string[]): Omit<Counts, 'isSummary'> {
   return { passed: total - failed - skipped, failed, skipped, total }
 }
 
-// Reads the result of a validator: ExoWorks validate (Errors (2): ... Content validation failed.) or
-// claude plugin validate (Found 1 warning: ... Validation passed with warnings). A validator that passes
-// counts one pass.
+// Reads the result of claude plugin validate (Found 1 warning: ... Validation passed with warnings).
+// A validator that passes counts one pass.
 function validateSummary(text: string): Omit<Counts, 'isSummary'> | null {
-  const result = text.match(/^\W*(?:Content )?[Vv]alidation (passed|failed)\b/m)
+  const result = text.match(/^\W*Validation (passed|failed)\b/m)
   if (!result) return null
-  const failed = num(text, /^Errors \((\d+)\):/m) + num(text, /Found (\d+) errors?\b/)
-  const skipped = num(text, /^Warnings \((\d+)\):/m) + num(text, /Found (\d+) warnings?\b/)
+  const failed = num(text, /Found (\d+) errors?\b/)
+  const skipped = num(text, /Found (\d+) warnings?\b/)
   const passed = result[1] === 'passed' ? 1 : 0
   return { passed, failed, skipped, total: passed + failed + skipped }
 }
@@ -287,9 +290,11 @@ function live(text: string): Omit<Counts, 'isSummary'> {
   return { passed, failed, skipped, total: total !== null && total > 0 ? total : null }
 }
 
-export function parseOutput(raw: string): Counts {
+// Reads the counts of the output. A runner of the config with its own summary patterns uses them;
+// the result lines that runners print while they work count until the summary comes.
+export function parseOutput(raw: string, runner?: Runner): Counts {
   const text = raw.replace(ANSI, '').replace(/\r(?!\n)/g, '\n').replace(/\r\n/g, '\n')
-  const s = summary(text)
+  const s = runner?.summary ? configSummary(text, runner.summary) : summary(text)
   if (s) return { ...s, isSummary: true }
   return { ...live(text), isSummary: false }
 }

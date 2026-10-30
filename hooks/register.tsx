@@ -2,6 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Run } from '../types'
+import { NO_SETUP, compile, configFiles, merge } from './config'
+import type { Setup } from './config'
 import { detectRunner, parseOutput } from './parse'
 import type { Counts } from './parse'
 
@@ -42,8 +44,37 @@ const dropExpired = ($: EngineInterface, now: number) =>
     list.filter(run => run.status === 'running' || (run.finishedAt !== undefined && now - run.finishedAt < KEEP_MS)),
   )
 
+// Reads the config files at each Bash call, so that an edit counts at once. Each new problem of
+// the config shows once in a toast.
+async function loadSetup($: EngineInterface, home: string | null, shown: { text: string }): Promise<Setup> {
+  const root = await $.session.root().catch(() => null)
+  if (root === null) return NO_SETUP
+  const setups: Setup[] = []
+  for (const file of configFiles(root, home)) {
+    const text = await $.fs.read(file).catch(() => null)
+    if (typeof text !== 'string') continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(text)
+    } catch {
+      setups.push({ ...NO_SETUP, problems: [`${file}: not valid JSON`] })
+      continue
+    }
+    setups.push(compile(parsed, file))
+  }
+  const setup = merge(setups)
+  const problems = setup.problems.join('\n')
+  if (problems !== '' && problems !== shown.text) $.ui.toast(`test-progress config: ${setup.problems[0]}`)
+  shown.text = problems
+  return setup
+}
+
 export const register: Register = on => {
   let tmp = '/tmp'
+  let home: string | null = null
+  // The problems of the config that the mod showed last: each new problem shows once.
+  const shown = { text: '' }
+
 
   on('session.start', async ($, e, next) => {
     // A reload cancels the old timers, so a run that was in progress can not finish.
@@ -62,12 +93,15 @@ export const register: Register = on => {
     if (found && found.exitCode === 0 && found.stdout.startsWith('/')) {
       tmp = found.stdout.replace(/\/+$/, '')
     }
+    const user = await $.process.run(['sh', '-c', 'printf %s "$HOME"']).catch(() => null)
+    if (user && user.exitCode === 0 && user.stdout.startsWith('/')) home = user.stdout
     return next(e)
   })
 
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    const runner = detectRunner(e.command)
-    if (runner === null) return next(e)
+    const rule = detectRunner(e.command, await loadSetup($, home, shown))
+    if (rule === null) return next(e)
+    const runner = rule.name
 
     const id = e.tool_use_id
     const log = `${tmp}/claude-test-progress-${id.replace(/[^A-Za-z0-9_-]/g, '')}.log`
@@ -109,7 +143,7 @@ export const register: Register = on => {
       }
       size = text.length
       changedAt = now
-      const counts = parseOutput(text)
+      const counts = parseOutput(text, rule)
       await setRun($, id, current => withCounts(current, counts))
       // A background run ends when its runner prints the summary.
       if (e.run_in_background && counts.isSummary) await finish(counts, counts.failed > 0)
@@ -126,8 +160,8 @@ export const register: Register = on => {
 
     // The log has the whole output, but `tee` can still be writing its end.
     // The model's text is complete at its end, but it can be cut in the middle.
-    const fromLog = parseOutput((await readLog()) ?? '')
-    const fromText = parseOutput(ran.text ?? '')
+    const fromLog = parseOutput((await readLog()) ?? '', rule)
+    const fromText = parseOutput(ran.text ?? '', rule)
     const done = (c: Counts) => c.passed + c.failed + c.skipped
     const best = fromLog.isSummary
       ? fromLog

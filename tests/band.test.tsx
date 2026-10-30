@@ -1,5 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { compile } from '../hooks/config'
 import { detectRunner, parseOutput } from '../hooks/parse'
 
 const BAND = {
@@ -9,16 +10,14 @@ const BAND = {
 } as const
 
 test('the runner is found in test commands only', async () => {
-  expect(detectRunner('cd api && python -m pytest -q')).toBe('pytest')
-  expect(detectRunner('npx vitest run')).toBe('vitest')
-  expect(detectRunner('go test ./...')).toBe('go test')
-  expect(detectRunner('pnpm test')).toBe('npm test')
-  expect(detectRunner('cat pytest.ini')).toBe(null)
-  expect(detectRunner('ls -la')).toBe(null)
-  expect(detectRunner('~/.venvs/badcad/bin/python cad/tools/test_scope.py --all')).toBe('test_scope')
-  expect(detectRunner('go run ./cmd/exoworks validate')).toBe('validate')
-  expect(detectRunner('claude plugin validate .')).toBe('plugin validate')
-  expect(detectRunner('timeout 600 ~/.local/bin/cad-slot ~/.venvs/badcad/bin/python -m unittest tests.test_x')).toBe('unittest')
+  expect(detectRunner('cd api && python -m pytest -q')?.name ?? null).toBe('pytest')
+  expect(detectRunner('npx vitest run')?.name ?? null).toBe('vitest')
+  expect(detectRunner('go test ./...')?.name ?? null).toBe('go test')
+  expect(detectRunner('pnpm test')?.name ?? null).toBe('npm test')
+  expect(detectRunner('cat pytest.ini')?.name ?? null).toBe(null)
+  expect(detectRunner('ls -la')?.name ?? null).toBe(null)
+  expect(detectRunner('claude plugin validate .')?.name ?? null).toBe('plugin validate')
+  expect(detectRunner('timeout 600 ~/.local/bin/cad-slot ~/.venvs/badcad/bin/python -m unittest tests.test_x')?.name ?? null).toBe('unittest')
 })
 
 test('the summary lines of each runner give the counts', async () => {
@@ -47,15 +46,84 @@ test('the summary lines of each runner give the counts', async () => {
   )
   expect([groups.passed, groups.failed, groups.total, groups.isSummary]).toEqual([37, 8, 45, true])
 
-  // the validators: the errors fail, the warnings are skipped, a pass counts one
-  const catalog = parseOutput(
-    'Validating instance model trees...\n\nWarnings (6):\n  ⚠  a\n\nErrors (15):\n  ✗  b\n\nContent validation failed.\nexit status 1\n',
-  )
-  expect([catalog.passed, catalog.failed, catalog.skipped, catalog.isSummary]).toEqual([0, 15, 6, true])
+  // claude plugin validate: the errors fail, the warnings are skipped, a pass counts one
   const plugin = parseOutput(
     'Validating marketplace manifest: x/marketplace.json\n\n⚠ Found 1 warning:\n\n  ❯ description: none\n\n✔ Validation passed with warnings\n',
   )
   expect([plugin.passed, plugin.failed, plugin.skipped]).toEqual([1, 0, 1])
+})
+
+// The ExoWorks config of the README: a runner with no summary patterns and a validator with its own.
+const EXOWORKS = {
+  runners: [
+    { name: 'test_scope', match: '\\btest_scope\\.py\\b' },
+    {
+      name: 'validate',
+      match: '\\b(cmd/)?exoworks\\s+validate\\b',
+      summary: {
+        result: '^Content validation (passed|failed)',
+        failed: '^Errors \\((\\d+)\\):',
+        skipped: '^Warnings \\((\\d+)\\):',
+        passIf: '^Content validation passed',
+      },
+    },
+  ],
+  disable: ['make test'],
+}
+
+test('the runners of a config come first, and a config turns off built-in runners', async () => {
+  const setup = compile(EXOWORKS, 'test-progress.json')
+  expect(setup.problems).toEqual([])
+  expect(detectRunner('~/.venvs/badcad/bin/python cad/tools/test_scope.py --all', setup)?.name).toBe('test_scope')
+  expect(detectRunner('go run ./cmd/exoworks validate', setup)?.name).toBe('validate')
+  expect(detectRunner('make test', setup)).toBe(null)
+  expect(detectRunner('make test')?.name).toBe('make test')
+  expect(detectRunner('pytest -q', setup)?.name).toBe('pytest')
+
+  // the summary patterns of the validator: errors fail, warnings are skipped, a pass counts one
+  const validate = detectRunner('go run ./cmd/exoworks validate', setup) ?? undefined
+  const failed = parseOutput(
+    'Validating instance model trees...\n\nWarnings (6):\n  ⚠  a\n\nErrors (15):\n  ✗  b\n\nContent validation failed.\nexit status 1\n',
+    validate,
+  )
+  expect([failed.passed, failed.failed, failed.skipped, failed.isSummary]).toEqual([0, 15, 6, true])
+  const passed = parseOutput('Validating instance model trees...\n\nContent validation passed.\n', validate)
+  expect([passed.passed, passed.failed, passed.isSummary]).toEqual([1, 0, true])
+  const running = parseOutput('Validating instance model trees...\n', validate)
+  expect(running.isSummary).toBe(false)
+})
+
+test('a config with a bad field keeps its good runners and names the problem', async () => {
+  const setup = compile({ runners: [{ name: 'bad', match: '(' }, { match: 'x' }, { name: 'ok', match: 'ok-run' }] }, 'f.json')
+  expect(setup.runners.map(r => r.name)).toEqual(['ok'])
+  expect(setup.problems).toEqual(['f.json runners[0].match: not a valid pattern', 'f.json runners[1].name: missing'])
+  expect(compile([], 'g.json').problems).toEqual([])
+  expect(compile('x', 'h.json').problems).toEqual(['h.json: not a JSON object'])
+})
+
+test('the mod reads the config of the project and of the user', async ($, on) => {
+  mock.clock(on)
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('session.root', () => ({ value: '/work/shop' }))
+  on('process.run', (_, e) => ({
+    value: { exitCode: 0, stdout: String(e.argv.at(-1)).includes('HOME') ? '/home/me' : '/tmp', stderr: '' },
+  }))
+  const files: Record<string, string> = {
+    '/work/.claude/test-progress.json': JSON.stringify({ runners: [{ name: 'shop check', match: '\\bshop-check\\b' }] }),
+    '/home/me/.claude/test-progress.json': JSON.stringify(EXOWORKS),
+  }
+  on('fs.read', (_, e) => {
+    const text = files[e.path]
+    if (text === undefined) throw new Error('ENOENT')
+    return { value: text }
+  })
+  on('tool.call', () => ({ result: {}, text: 'Ran 3 tests in 0.1s\n\nOK\n' }))
+
+  await $.session.start({ cwd: '/work/shop', surface: 'terminal', isInteractive: true })
+  await $.tool.call({ tool: 'Bash', command: './shop-check --all' })
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect((await ui.find({ type: 'Text', text: /shop check/ }))?.text).toMatch(/ 3\/3 ✓3 ✗0 shop check$/)
+  await ui.unmount()
 })
 
 test('the result lines count while the tests run', async () => {
@@ -102,7 +170,10 @@ test('the band counts the tests while the command runs', async ($, on) => {
   const clock = mock.clock(on)
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: '/tmp', stderr: '' } }))
-  on('fs.read', () => ({ value: 'collected 10 items\n\ntests/test_a.py ...F [ 40%]\n' }))
+  on('fs.read', (_, e) => {
+    if (!e.path.includes('claude-test-progress-')) throw new Error('ENOENT')
+    return { value: 'collected 10 items\n\ntests/test_a.py ...F [ 40%]\n' }
+  })
   on('tool.call', async () => {
     await clock.sleep(5000)
     return { result: {}, text: '' }
