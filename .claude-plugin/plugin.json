@@ -1,6 +1,6 @@
 {
   "name": "test-progress",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Shows a progress bar above the prompt for each test run in the session: tests completed, passed, and failed.",
   "author": {
     "name": "spikeon"
