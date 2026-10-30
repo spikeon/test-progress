@@ -13,18 +13,21 @@ A Claude Code mod that shows a progress bar above the prompt for each test run i
 
 ## Install
 
-At the prompt of a terminal session:
-
-```
-/plugin install test-progress --marketplace spikeon/test-progress
-```
-
-Type `y` to add the marketplace, then select a scope.
-
-From a shell:
+From a shell, add the marketplace, then install the mod:
 
 ```bash
-claude plugin install test-progress --marketplace spikeon/test-progress
+claude plugin marketplace add spikeon/test-progress
+```
+
+```bash
+claude plugin install test-progress@test-progress
+```
+
+At the prompt of a terminal session, type the same two commands:
+
+```
+/plugin marketplace add spikeon/test-progress
+/plugin install test-progress@test-progress
 ```
 
 In the desktop app, `/plugin` does not run. Click **+** next to the prompt box, then **Plugins**. Click **Add marketplace** and type `spikeon/test-progress`. Then click **Add plugin**.
