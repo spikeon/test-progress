@@ -34,7 +34,7 @@ In the desktop app, `/plugin` does not run. Click **+** next to the prompt box, 
 
 ## Supported test runners
 
-- Python: pytest, unittest, tox
+- Python: pytest, unittest, tox, and the ExoWorks `cad/tools/test_scope.py` (one summary for each unittest group)
 - JavaScript: jest, vitest, mocha, bun test, deno test, node --test, `npm test`, `pnpm test`, `yarn test`
 - Go, Rust, and .NET: go test, cargo test, dotnet test
 - Ruby, PHP, and Elixir: rspec, rake, phpunit, mix test

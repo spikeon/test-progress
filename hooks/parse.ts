@@ -11,6 +11,8 @@ export type Counts = {
 
 const RUNNERS: readonly [string, RegExp][] = [
   ['pytest', /\b(pytest|py\.test)\b|\bpython3?\s+-m\s+pytest\b/],
+  // ExoWorks cad/tools/test_scope.py: runs the unittest groups that the git diff can break
+  ['test_scope', /\btest_scope\.py\b/],
   ['unittest', /\bpython3?\s+-m\s+unittest\b/],
   ['vitest', /\bvitest\b/],
   ['jest', /\bjest\b/],
@@ -59,6 +61,23 @@ const sumAll = (text: string, pattern: RegExp): number | null => {
     isFound = true
   }
   return isFound ? total : null
+}
+
+// Adds the summaries of all unittest runs in the output.
+function unittestSummary(lines: string[]): Omit<Counts, 'isSummary'> {
+  const starts = lines.flatMap((line, i) => (/^Ran \d+ tests? in /.test(line) ? [i] : []))
+  let total = 0
+  let failed = 0
+  let skipped = 0
+  starts.forEach((start, k) => {
+    const block = lines.slice(start + 1, starts[k + 1] ?? lines.length)
+    // the result line (OK or FAILED) comes right after the Ran line and a blank line
+    const result = block.find((l) => /^(OK|FAILED)\b/.test(l)) ?? ''
+    total += num(lines[start] ?? '', /^Ran (\d+)/)
+    failed += num(result, /failures=(\d+)/) + num(result, /errors=(\d+)/)
+    skipped += num(result, /skipped=(\d+)/) + num(result, /expected failures=(\d+)/)
+  })
+  return { passed: total - failed - skipped, failed, skipped, total }
 }
 
 // Reads the final summary line of a known runner. The last summary wins,
@@ -132,15 +151,9 @@ function summary(text: string): Omit<Counts, 'isSummary'> | null {
     m = line.match(/^OK \((\d+) tests?,/)
     if (m) return { passed: Number((m[1] ?? '')), failed: 0, skipped: 0, total: Number((m[1] ?? '')) }
 
-    // unittest: Ran 12 tests in 0.01s, then OK or FAILED (failures=1, errors=1, skipped=2)
-    m = line.match(/^Ran (\d+) tests? in /)
-    if (m) {
-      const total = Number((m[1] ?? ''))
-      const tail = lines.slice(i + 1).join('\n')
-      const failed = num(tail, /failures=(\d+)/) + num(tail, /errors=(\d+)/)
-      const skipped = num(tail, /skipped=(\d+)/) + num(tail, /expected failures=(\d+)/)
-      return { passed: total - failed - skipped, failed, skipped, total }
-    }
+    // unittest: Ran 12 tests in 0.01s, then OK or FAILED (failures=1, errors=1, skipped=2).
+    // A command that runs more than one unittest group prints one summary for each group: add them.
+    if (/^Ran \d+ tests? in /.test(line)) return unittestSummary(lines)
   }
 
   // mocha: 5 passing, 1 failing, 2 pending

@@ -15,6 +15,8 @@ test('the runner is found in test commands only', async () => {
   expect(detectRunner('pnpm test')).toBe('npm test')
   expect(detectRunner('cat pytest.ini')).toBe(null)
   expect(detectRunner('ls -la')).toBe(null)
+  expect(detectRunner('~/.venvs/badcad/bin/python cad/tools/test_scope.py --all')).toBe('test_scope')
+  expect(detectRunner('timeout 600 ~/.local/bin/cad-slot ~/.venvs/badcad/bin/python -m unittest tests.test_x')).toBe('unittest')
 })
 
 test('the summary lines of each runner give the counts', async () => {
@@ -35,6 +37,13 @@ test('the summary lines of each runner give the counts', async () => {
 
   const unittest = parseOutput('Ran 12 tests in 0.010s\n\nFAILED (failures=2, skipped=1)\n')
   expect([unittest.passed, unittest.failed, unittest.skipped]).toEqual([9, 2, 1])
+
+  // test_scope.py runs one unittest group after the other: each group prints its own summary
+  const groups = parseOutput(
+    'Ran 44 tests in 237.796s\n\nFAILED (failures=7)\n66 changed files -> 11 test ids\n' +
+      'Ran 1 test in 223.298s\n\nFAILED (failures=1)\n',
+  )
+  expect([groups.passed, groups.failed, groups.total, groups.isSummary]).toEqual([37, 8, 45, true])
 })
 
 test('the result lines count while the tests run', async () => {
